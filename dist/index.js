@@ -16778,6 +16778,22 @@ async function action() {
         ),
         client
       );
+      const files = filesCoverage.files;
+      var failCoverage = false;
+      files.forEach((file) => {
+        if (file.percentage < minCoverageChangedFiles) {
+          failCoverage = true;
+        }
+        if (debugMode) {
+          core.info(`file.percentage < minCoverageChangedFiles: ${debug(file.percentage)} < ${debug(minCoverageChangedFiles)}`);
+        }
+      });
+      if (failCoverage) {
+        core.setFailed('Target file must have more than minimum coverage.');
+      }
+      if (debugMode) {
+        core.info(`failCoverage: ${debug(failCoverage)}`);
+      }
     }
   } catch (error) {
     core.setFailed(error);
