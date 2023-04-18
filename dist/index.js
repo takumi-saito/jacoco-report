@@ -16711,7 +16711,7 @@ async function action() {
     const { base, head, prNumber } = getContextInfo(github.context);
 
     const client = github.getOctokit(input.token);
-    const reportsJson = await getJsonReports(input.reportPaths);
+    const reportsJson = await getJsonReports(input.paths);
     const reports = reportsJson.map((report) => report["report"]);
 
     const overallCoverage = process.getOverallCoverage(reports);
