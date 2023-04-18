@@ -16701,118 +16701,95 @@ const { parseBooleans } = __nccwpck_require__(6951);
 const process = __nccwpck_require__(377);
 const render = __nccwpck_require__(5543);
 
+/**
+ * Github Actions の処理を実行。
+ * イベントに基づいてカバレッジ情報を取得し、PRへコメントを追加する。
+ */
 async function action() {
   try {
-    const pathsString = core.getInput("paths");
-    const reportPaths = pathsString.split(",");
-    const minCoverageOverall = parseFloat(
-      core.getInput("min-coverage-overall")
-    );
-    const minCoverageChangedFiles = parseFloat(
-      core.getInput("min-coverage-changed-files")
-    );
-    const title = core.getInput("title");
-    const updateComment = parseBooleans(core.getInput("update-comment"));
-    const debugMode = parseBooleans(core.getInput("debug-mode"));
-    const event = github.context.eventName;
-    core.info(`Event is ${event}`);
+    const input = getInputValues();
+    const { base, head, prNumber } = getContextInfo(github.context);
 
-    var base;
-    var head;
-    var prNumber;
-    switch (event) {
-      case "pull_request":
-      case "pull_request_target":
-        base = github.context.payload.pull_request.base.sha;
-        head = github.context.payload.pull_request.head.sha;
-        prNumber = github.context.payload.pull_request.number;
-        break;
-      case "push":
-        base = github.context.payload.before;
-        head = github.context.payload.after;
-        isPR = false;
-        break;
-      default:
-        throw `Only pull requests and pushes are supported, ${github.context.eventName} not supported.`;
-    }
-
-    core.info(`base sha: ${base}`);
-    core.info(`head sha: ${head}`);
-
-    const client = github.getOctokit(core.getInput("token"));
-
-    if (debugMode) core.info(`reportPaths: ${reportPaths}`);
-    const reportsJsonAsync = getJsonReports(reportPaths);
-    const changedFiles = await getChangedFiles(base, head, client);
-    if (debugMode) core.info(`changedFiles: ${debug(changedFiles)}`);
-
-    const reportsJson = await reportsJsonAsync;
-    if (debugMode) core.info(`report value: ${debug(reportsJson)}`);
+    const client = github.getOctokit(input.token);
+    const reportsJson = await getJsonReports(input.reportPaths);
     const reports = reportsJson.map((report) => report["report"]);
 
     const overallCoverage = process.getOverallCoverage(reports);
-    if (debugMode) core.info(`overallCoverage: ${overallCoverage}`);
-    core.setOutput(
-      "coverage-overall",
-      parseFloat(overallCoverage.project.toFixed(2))
-    );
+    core.setOutput("coverage-overall", overallCoverage.project.toFixed(2));
 
+    const changedFiles = await getChangedFiles(base, head, client);
     const filesCoverage = process.getFileCoverage(reports, changedFiles);
-    if (debugMode) core.info(`filesCoverage: ${debug(filesCoverage)}`);
-    core.setOutput(
-      "coverage-changed-files",
-      parseFloat(filesCoverage.percentage.toFixed(2))
-    );
+    core.setOutput("coverage-changed-files", filesCoverage.percentage.toFixed(2));
 
-    if (prNumber != null) {
-      await addComment(
-        prNumber,
-        updateComment,
-        render.getTitle(title),
-        render.getPRComment(
-          overallCoverage.project,
-          filesCoverage,
-          minCoverageOverall,
-          minCoverageChangedFiles,
-          title
-        ),
-        client
-      );
-      const files = filesCoverage.files;
-      var failCoverage = false;
-      files.forEach((file) => {
-        if (file.percentage < minCoverageChangedFiles) {
-          failCoverage = true;
-        }
-        if (debugMode) {
-          core.info(`file.percentage < minCoverageChangedFiles: ${debug(file.percentage)} < ${debug(minCoverageChangedFiles)}`);
-        }
-      });
-      if (failCoverage) {
-        core.setFailed('Target file must have more than minimum coverage.');
-      }
-      if (debugMode) {
-        core.info(`failCoverage: ${debug(failCoverage)}`);
-      }
+    if (prNumber) {
+      await handlePullRequest(prNumber, input, overallCoverage, filesCoverage, client);
     }
   } catch (error) {
     core.setFailed(error);
   }
 }
 
-function debug(obj) {
-  return JSON.stringify(obj, " ", 4);
+function getInputValues() {
+  return {
+    paths: core.getInput("paths").split(","),
+    minCoverageOverall: parseFloat(core.getInput("min-coverage-overall")),
+    minCoverageChangedFiles: parseFloat(core.getInput("min-coverage-changed-files")),
+    title: core.getInput("title"),
+    updateComment: parseBooleans(core.getInput("update-comment")),
+    debugMode: parseBooleans(core.getInput("debug-mode")),
+    token: core.getInput("token"),
+  };
 }
 
+function getContextInfo(context) {
+  const event = context.eventName;
+  core.info(`Event is ${event}`);
+
+  let base, head, prNumber;
+  switch (event) {
+    case "pull_request":
+    case "pull_request_target":
+      base = context.payload.pull_request.base.sha;
+      head = context.payload.pull_request.head.sha;
+      prNumber = context.payload.pull_request.number;
+      break;
+    case "push":
+      base = context.payload.before;
+      head = context.payload.after;
+      break;
+    default:
+      throw `Only pull requests and pushes are supported, ${event} not supported.`;
+  }
+
+  core.info(`base sha: ${base}`);
+  core.info(`head sha: ${head}`);
+
+  return { base, head, prNumber };
+}
+
+/**
+ * 指定されたレポートファイルから JSON オブジェクトを取得
+ *
+ * @param {Array} xmlPaths - レポートファイルへのパスの配列
+ * @returns {Promise<Array>} - JSON オブジェクトの配列
+ */
 async function getJsonReports(xmlPaths) {
   return Promise.all(
-    xmlPaths.map(async (xmlPath) => {
-      const reportXml = await fs.promises.readFile(xmlPath.trim(), "utf-8");
-      return await parser.parseStringPromise(reportXml);
-    })
+      xmlPaths.map(async (xmlPath) => {
+        const reportXml = await fs.promises.readFile(xmlPath.trim(), "utf-8");
+        return await parser.parseStringPromise(reportXml);
+      })
   );
 }
 
+/**
+ * 指定された範囲の変更ファイルを取得
+ *
+ * @param {string} base - 比較元のコミット SHA
+ * @param {string} head - 比較先のコミット SHA
+ * @param {Object} client - Github API クライアント
+ * @returns {Promise<Array>} - 変更ファイルの配列
+ */
 async function getChangedFiles(base, head, client) {
   const response = await client.repos.compareCommits({
     base,
@@ -16821,17 +16798,32 @@ async function getChangedFiles(base, head, client) {
     repo: github.context.repo.repo,
   });
 
-  var changedFiles = [];
-  response.data.files.forEach((file) => {
-    var changedFile = {
-      filePath: file.filename,
-      url: file.blob_url,
-    };
-    changedFiles.push(changedFile);
-  });
-  return changedFiles;
+  return response.data.files.map((file) => ({
+    filePath: file.filename,
+    url: file.blob_url,
+  }));
 }
 
+async function handlePullRequest(prNumber, input, overallCoverage, filesCoverage, client) {
+  await addComment(prNumber, input.updateComment, render.getTitle(input.title), render.getPRComment(overallCoverage.project, filesCoverage, input.minCoverageOverall, input.minCoverageChangedFiles, input.title), client);
+
+  const failedCoverage = filesCoverage.files.some((file) => file.percentage < input.minCoverageChangedFiles);
+  if (failedCoverage) {
+    core.setFailed
+    ("Target file must have more than minimum coverage.");
+  }
+}
+
+
+/**
+ * PR にコメントを追加または更新
+ *
+ * @param {number} prNumber - PR 番号
+ * @param {boolean} update - コメントを更新する場合は true
+ * @param {string} title - コメントのタイトル
+ * @param {string} body - コメントの本文
+ * @param {Object} client - Github API クライアント
+ */
 async function addComment(prNumber, update, title, body, client) {
   let commentUpdated = false;
 
@@ -16841,7 +16833,7 @@ async function addComment(prNumber, update, title, body, client) {
       ...github.context.repo,
     });
     const comment = comments.data.find((comment) =>
-      comment.body.startsWith(title),
+        comment.body.startsWith(title),
     );
 
     if (comment) {
@@ -16873,105 +16865,137 @@ module.exports = {
 /***/ 377:
 /***/ ((module) => {
 
+/**
+ * レポートからファイルのカバレッジを取得
+ * @param {Array} reports - レポートの配列
+ * @param {Array} files - ファイルの配列
+ * @returns {object} ファイルのカバレッジ情報
+ */
 function getFileCoverage(reports, files) {
-  const packages = reports.map((report) => report["package"]);
-  return getFileCoverageFromPackages([].concat(...packages), files);
+  const packages = reports.flatMap((report) => report["package"]);
+  return getFileCoverageFromPackages(packages, files);
 }
 
+/**
+ * パッケージからファイルのカバレッジを取得
+ * @param {Array} packages - パッケージの配列
+ * @param {Array} files - ファイルの配列
+ * @returns {object} ファイルのカバレッジ情報
+ */
 function getFileCoverageFromPackages(packages, files) {
-  const result = {};
-  const resultFiles = [];
-  packages.forEach((item) => {
+  const resultFiles = packages.flatMap((item) => {
     const packageName = item["$"].name;
     const sourceFiles = item.sourcefile;
-    sourceFiles.forEach((sourceFile) => {
+    return sourceFiles.flatMap((sourceFile) => {
       const sourceFileName = sourceFile["$"].name;
-      var file = files.find(function (f) {
-        return f.filePath.endsWith(`${packageName}/${sourceFileName}`);
-      });
-      if (file != null) {
-        const fileName = sourceFile["$"].name;
+      const file = files.find((f) =>
+          f.filePath.endsWith(`${packageName}/${sourceFileName}`)
+      );
+      if (file) {
         const counters = sourceFile["counter"];
-        if (counters != null && counters.length != 0) {
+        if (counters) {
           const coverage = getDetailedCoverage(counters, "INSTRUCTION");
-          file["name"] = fileName;
-          file["missed"] = coverage.missed;
-          file["covered"] = coverage.covered;
-          file["percentage"] = coverage.percentage;
-          resultFiles.push(file);
+          return {
+            ...file,
+            name: sourceFileName,
+            missed: coverage.missed,
+            covered: coverage.covered,
+            percentage: coverage.percentage,
+          };
         }
       }
+      return [];
     });
-    resultFiles.sort((a, b) => b.percentage - a.percentage);
-  });
-  result.files = resultFiles;
-  if (resultFiles.length != 0) {
-    result.percentage = getTotalPercentage(resultFiles);
-  } else {
-    result.percentage = 100;
-  }
-  return result;
+  }).sort((a, b) => b.percentage - a.percentage);
+
+  return {
+    files: resultFiles,
+    percentage: resultFiles.length ? getTotalPercentage(resultFiles) : 100,
+  };
 }
 
+/**
+ * ファイルの総カバレッジを取得
+ * @param {Array} files - ファイルの配列
+ * @returns {number} 総カバレッジ
+ */
 function getTotalPercentage(files) {
-  var missed = 0;
-  var covered = 0;
-  files.forEach((file) => {
-    missed += file.missed;
-    covered += file.covered;
-  });
+  const { covered, missed } = files.reduce(
+      (acc, file) => {
+        acc.missed += file.missed;
+        acc.covered += file.covered;
+        return acc;
+      },
+      { missed: 0, covered: 0 }
+  );
+
   return parseFloat(((covered / (covered + missed)) * 100).toFixed(2));
 }
 
+/**
+ * レポートから全体のカバレッジを取得
+ * @param {Array} reports - レポートの配列
+ * @returns {object} 全体のカバレッジ情報
+ */
 function getOverallCoverage(reports) {
-  const coverage = {};
-  const modules = [];
-  reports.forEach((report) => {
+  const modules = reports.map((report) => {
     const moduleName = report["$"].name;
     const moduleCoverage = getModuleCoverage(report);
-    modules.push({
+    return {
       module: moduleName,
       coverage: moduleCoverage,
-    });
+    };
   });
-  coverage.project = getProjectCoverage(reports);
-  coverage.modules = modules;
-  return coverage;
+
+  return {
+    project: getProjectCoverage(reports),
+    modules: modules,
+  };
 }
 
+/**
+ * レポートからモジュールのカバレッジを取得
+ * @param {object} report - レポートオブジェクト
+ * @returns {number} モジュールのカバレッジ
+ */
 function getModuleCoverage(report) {
   const counters = report["counter"];
   const coverage = getDetailedCoverage(counters, "INSTRUCTION");
   return coverage.percentage;
 }
 
+/**
+ * レポートからプロジェクト全体のカバレッジを取得
+ * @param {Array} reports - レポートの配列
+ * @returns {number} プロジェクト全体のカバレッジ
+ */
 function getProjectCoverage(reports) {
   const coverages = reports.map((report) =>
-    getDetailedCoverage(report["counter"], "INSTRUCTION")
+      getDetailedCoverage(report["counter"], "INSTRUCTION")
   );
   const covered = coverages.reduce(
-    (acc, coverage) => acc + coverage.covered,
-    0
+      (acc, coverage) => acc + coverage.covered,
+      0
   );
   const missed = coverages.reduce((acc, coverage) => acc + coverage.missed, 0);
   return parseFloat(((covered / (covered + missed)) * 100).toFixed(2));
 }
 
+/**
+ * カウンタータイプに応じた詳細なカバレッジ情報を取得
+ * @param {Array} counters - カウンターの配列
+ * @param {string} type - カウンタータイプ
+ * @returns {object} 詳細なカバレッジ情報
+ */
 function getDetailedCoverage(counters, type) {
-  const coverage = {};
-  counters.forEach((counter) => {
-    const attr = counter["$"];
-    if (attr["type"] == type) {
-      const missed = parseFloat(attr["missed"]);
-      const covered = parseFloat(attr["covered"]);
-      coverage.missed = missed;
-      coverage.covered = covered;
-      coverage.percentage = parseFloat(
-        ((covered / (covered + missed)) * 100).toFixed(2)
-      );
-    }
-  });
-  return coverage;
+  const counter = counters.find((c) => c["$"].type === type);
+  const missed = parseFloat(counter["$"].missed);
+  const covered = parseFloat(counter["$"].covered);
+  return {
+    missed: missed,
+    covered: covered,
+    percentage: parseFloat(((covered / (covered + missed)) * 100).toFixed(2)),
+  };
 }
 
 module.exports = {
@@ -16979,83 +17003,98 @@ module.exports = {
   getOverallCoverage,
 };
 
-
 /***/ }),
 
 /***/ 5543:
 /***/ ((module) => {
 
-function getPRComment(
-  overallCoverage,
-  filesCoverage,
-  minCoverageOverall,
-  minCoverageChangedFiles,
-  title
-) {
+/**
+ * PRコメントを生成
+ * @param {number} overallCoverage - 全体のカバレッジ
+ * @param {object} filesCoverage - 変更されたファイルのカバレッジ
+ * @param {number} minCoverageOverall - 全体の最低カバレッジ
+ * @param {number} minCoverageChangedFiles - 変更されたファイルの最低カバレッジ
+ * @param {string} title - コメントのタイトル
+ * @returns {string} PRコメント
+ */
+function getPRComment(overallCoverage, filesCoverage, minCoverageOverall, minCoverageChangedFiles, title) {
   const fileTable = getFileTable(filesCoverage, minCoverageChangedFiles);
   const overallTable = getOverallTable(overallCoverage, minCoverageOverall);
   const heading = getTitle(title);
-  return heading + fileTable + `\n\n` + overallTable;
+  return `${heading}${fileTable}\n\n${overallTable}`;
 }
 
+/**
+ * ファイルのカバレッジテーブルを生成
+ * @param {object} filesCoverage - ファイルのカバレッジ
+ * @param {number} minCoverage - 最低カバレッジ
+ * @returns {string} ファイルのカバレッジテーブル
+ */
 function getFileTable(filesCoverage, minCoverage) {
   const files = filesCoverage.files;
+
   if (files.length === 0) {
-    return `> There is no coverage information present for the Files changed`;
+    return '> There is no coverage information present for the Files changed';
   }
 
   const tableHeader = getHeader(filesCoverage.percentage);
-  const tableStructure = `|:-|:-:|:-:|`;
-  var table = tableHeader + `\n` + tableStructure;
-  files.forEach((file) => {
-    renderFileRow(`[${file.name}](${file.url})`, file.percentage);
+  const tableStructure = '|:-|:-:|:-:|';
+  let table = `${tableHeader}\n${tableStructure}`;
+
+  files.forEach(file => {
+    table += `\n${getRow(`[${file.name}](${file.url})`, file.percentage)}`;
   });
+
   return table;
 
-  function renderFileRow(name, coverage) {
-    addRow(getRow(name, coverage));
-  }
-
   function getHeader(coverage) {
-    var status = getStatus(coverage, minCoverage);
+    const status = getStatus(coverage, minCoverage);
     return `|File|Coverage [${formatCoverage(coverage)}]|${status}|`;
   }
 
   function getRow(name, coverage) {
-    var status = getStatus(coverage, minCoverage);
+    const status = getStatus(coverage, minCoverage);
     return `|${name}|${formatCoverage(coverage)}|${status}|`;
   }
-
-  function addRow(row) {
-    table = table + `\n` + row;
-  }
 }
 
+/**
+ * 全体のカバレッジテーブルを生成
+ * @param {number} coverage - 全体のカバレッジ
+ * @param {number} minCoverage - 最低カバレッジ
+ * @returns {string} 全体のカバレッジテーブル
+ */
 function getOverallTable(coverage, minCoverage) {
-  var status = getStatus(coverage, minCoverage);
-  const tableHeader = `|Total Project Coverage|${formatCoverage(
-    coverage
-  )}|${status}|`;
-  const tableStructure = `|:-|:-:|:-:|`;
-  return tableHeader + `\n` + tableStructure;
+  const status = getStatus(coverage, minCoverage);
+  const tableHeader = `|Total Project Coverage|${formatCoverage(coverage)}|${status}|`;
+  const tableStructure = '|:-|:-:|:-:|';
+  return `${tableHeader}\n${tableStructure}`;
 }
 
+/**
+ * タイトルを生成します。
+ * @param {string} title - タイトル
+ * @returns {string} タイトルのMarkdown形式
+ */
 function getTitle(title) {
-  if (title != null && title.length > 0) {
-    return "### " + title + `\n`;
-  } else {
-    return "";
-  }
+  return title ? `### ${title}\n` : '';
 }
 
+/**
+ * カバレッジのステータスを取得
+ * @param {number} coverage - カバレッジ
+ * @param {number} minCoverage - 最低カバレッジ
+ * @returns {string} カバレッジのステータス（絵文字）
+ */
 function getStatus(coverage, minCoverage) {
-  var status = `:green_apple:`;
-  if (coverage < minCoverage) {
-    status = `:x:`;
-  }
-  return status;
+  return coverage < minCoverage ? ':x:' : ':white_check_mark:';
 }
 
+/**
+ * カバレッジをフォーマット
+ * @param {number} coverage - カバレッジ
+ * @returns {string} フォーマットされたカバレッジ（パーセント表示）
+ */
 function formatCoverage(coverage) {
   return `${parseFloat(coverage.toFixed(2))}%`;
 }
@@ -17064,7 +17103,6 @@ module.exports = {
   getPRComment,
   getTitle,
 };
-
 
 /***/ }),
 

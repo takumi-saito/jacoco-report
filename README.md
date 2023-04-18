@@ -1,6 +1,6 @@
 # jacoco-report
 
-[![Tests](https://github.com/Madrapps/jacoco-report/actions/workflows/check.yml/badge.svg)](https://github.com/Madrapps/jacoco-report/actions/workflows/check.yml)
+[![Tests](https://github.com/takumi-saito/jacoco-report/actions/workflows/check.yml/badge.svg)](https://github.com/takumi-saito/jacoco-report/actions/workflows/check.yml)
 
 A Github action that publishes the JaCoCo report as a comment in the Pull Request with customizable pass percentage for modified files and for the entire project.
 
@@ -48,7 +48,7 @@ jobs:
 
       - name: Add coverage to PR
         id: jacoco
-        uses: takumi-saito/jacoco-report@v1.5
+        uses: takumi-saito/jacoco-report@v1.6
         with:
           paths: ${{ github.workspace }}/build/reports/jacoco/testCoverage/testCoverage.xml
           token: ${{ secrets.GITHUB_TOKEN }}
@@ -61,9 +61,8 @@ jobs:
 
 ### Example Project
 
-For a working project refer to [jacoco-playgound](https://github.com/thsaravana/jacoco-playground). Check out the PR's in
+For a working project refer to [jacoco-playgound](https://github.com/takumi-saito/UTSampleApp). Check out the PR's in
 the project to get an idea on how the report is shown on a pull request comment.
-For multi module gradle project, refer [jacoco-android-playground](https://github.com/thsaravana/jacoco-android-playground)
 
 ## License
 
