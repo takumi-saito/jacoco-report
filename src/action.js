@@ -6,118 +6,95 @@ const { parseBooleans } = require("xml2js/lib/processors");
 const process = require("./process");
 const render = require("./render");
 
+/**
+ * Github Actions の処理を実行。
+ * イベントに基づいてカバレッジ情報を取得し、PRへコメントを追加する。
+ */
 async function action() {
   try {
-    const pathsString = core.getInput("paths");
-    const reportPaths = pathsString.split(",");
-    const minCoverageOverall = parseFloat(
-      core.getInput("min-coverage-overall")
-    );
-    const minCoverageChangedFiles = parseFloat(
-      core.getInput("min-coverage-changed-files")
-    );
-    const title = core.getInput("title");
-    const updateComment = parseBooleans(core.getInput("update-comment"));
-    const debugMode = parseBooleans(core.getInput("debug-mode"));
-    const event = github.context.eventName;
-    core.info(`Event is ${event}`);
+    const input = getInputValues();
+    const { base, head, prNumber } = getContextInfo(github.context);
 
-    var base;
-    var head;
-    var prNumber;
-    switch (event) {
-      case "pull_request":
-      case "pull_request_target":
-        base = github.context.payload.pull_request.base.sha;
-        head = github.context.payload.pull_request.head.sha;
-        prNumber = github.context.payload.pull_request.number;
-        break;
-      case "push":
-        base = github.context.payload.before;
-        head = github.context.payload.after;
-        isPR = false;
-        break;
-      default:
-        throw `Only pull requests and pushes are supported, ${github.context.eventName} not supported.`;
-    }
-
-    core.info(`base sha: ${base}`);
-    core.info(`head sha: ${head}`);
-
-    const client = github.getOctokit(core.getInput("token"));
-
-    if (debugMode) core.info(`reportPaths: ${reportPaths}`);
-    const reportsJsonAsync = getJsonReports(reportPaths);
-    const changedFiles = await getChangedFiles(base, head, client);
-    if (debugMode) core.info(`changedFiles: ${debug(changedFiles)}`);
-
-    const reportsJson = await reportsJsonAsync;
-    if (debugMode) core.info(`report value: ${debug(reportsJson)}`);
+    const client = github.getOctokit(input.token);
+    const reportsJson = await getJsonReports(input.reportPaths);
     const reports = reportsJson.map((report) => report["report"]);
 
     const overallCoverage = process.getOverallCoverage(reports);
-    if (debugMode) core.info(`overallCoverage: ${overallCoverage}`);
-    core.setOutput(
-      "coverage-overall",
-      parseFloat(overallCoverage.project.toFixed(2))
-    );
+    core.setOutput("coverage-overall", overallCoverage.project.toFixed(2));
 
+    const changedFiles = await getChangedFiles(base, head, client);
     const filesCoverage = process.getFileCoverage(reports, changedFiles);
-    if (debugMode) core.info(`filesCoverage: ${debug(filesCoverage)}`);
-    core.setOutput(
-      "coverage-changed-files",
-      parseFloat(filesCoverage.percentage.toFixed(2))
-    );
+    core.setOutput("coverage-changed-files", filesCoverage.percentage.toFixed(2));
 
-    if (prNumber != null) {
-      await addComment(
-        prNumber,
-        updateComment,
-        render.getTitle(title),
-        render.getPRComment(
-          overallCoverage.project,
-          filesCoverage,
-          minCoverageOverall,
-          minCoverageChangedFiles,
-          title
-        ),
-        client
-      );
-      const files = filesCoverage.files;
-      var failCoverage = false;
-      files.forEach((file) => {
-        if (file.percentage < minCoverageChangedFiles) {
-          failCoverage = true;
-        }
-        if (debugMode) {
-          core.info(`file.percentage < minCoverageChangedFiles: ${debug(file.percentage)} < ${debug(minCoverageChangedFiles)}`);
-        }
-      });
-      if (failCoverage) {
-        core.setFailed('Target file must have more than minimum coverage.');
-      }
-      if (debugMode) {
-        core.info(`failCoverage: ${debug(failCoverage)}`);
-      }
+    if (prNumber) {
+      await handlePullRequest(prNumber, input, overallCoverage, filesCoverage, client);
     }
   } catch (error) {
     core.setFailed(error);
   }
 }
 
-function debug(obj) {
-  return JSON.stringify(obj, " ", 4);
+function getInputValues() {
+  return {
+    paths: core.getInput("paths").split(","),
+    minCoverageOverall: parseFloat(core.getInput("min-coverage-overall")),
+    minCoverageChangedFiles: parseFloat(core.getInput("min-coverage-changed-files")),
+    title: core.getInput("title"),
+    updateComment: parseBooleans(core.getInput("update-comment")),
+    debugMode: parseBooleans(core.getInput("debug-mode")),
+    token: core.getInput("token"),
+  };
 }
 
+function getContextInfo(context) {
+  const event = context.eventName;
+  core.info(`Event is ${event}`);
+
+  let base, head, prNumber;
+  switch (event) {
+    case "pull_request":
+    case "pull_request_target":
+      base = context.payload.pull_request.base.sha;
+      head = context.payload.pull_request.head.sha;
+      prNumber = context.payload.pull_request.number;
+      break;
+    case "push":
+      base = context.payload.before;
+      head = context.payload.after;
+      break;
+    default:
+      throw `Only pull requests and pushes are supported, ${event} not supported.`;
+  }
+
+  core.info(`base sha: ${base}`);
+  core.info(`head sha: ${head}`);
+
+  return { base, head, prNumber };
+}
+
+/**
+ * 指定されたレポートファイルから JSON オブジェクトを取得
+ *
+ * @param {Array} xmlPaths - レポートファイルへのパスの配列
+ * @returns {Promise<Array>} - JSON オブジェクトの配列
+ */
 async function getJsonReports(xmlPaths) {
   return Promise.all(
-    xmlPaths.map(async (xmlPath) => {
-      const reportXml = await fs.promises.readFile(xmlPath.trim(), "utf-8");
-      return await parser.parseStringPromise(reportXml);
-    })
+      xmlPaths.map(async (xmlPath) => {
+        const reportXml = await fs.promises.readFile(xmlPath.trim(), "utf-8");
+        return await parser.parseStringPromise(reportXml);
+      })
   );
 }
 
+/**
+ * 指定された範囲の変更ファイルを取得
+ *
+ * @param {string} base - 比較元のコミット SHA
+ * @param {string} head - 比較先のコミット SHA
+ * @param {Object} client - Github API クライアント
+ * @returns {Promise<Array>} - 変更ファイルの配列
+ */
 async function getChangedFiles(base, head, client) {
   const response = await client.repos.compareCommits({
     base,
@@ -126,17 +103,32 @@ async function getChangedFiles(base, head, client) {
     repo: github.context.repo.repo,
   });
 
-  var changedFiles = [];
-  response.data.files.forEach((file) => {
-    var changedFile = {
-      filePath: file.filename,
-      url: file.blob_url,
-    };
-    changedFiles.push(changedFile);
-  });
-  return changedFiles;
+  return response.data.files.map((file) => ({
+    filePath: file.filename,
+    url: file.blob_url,
+  }));
 }
 
+async function handlePullRequest(prNumber, input, overallCoverage, filesCoverage, client) {
+  await addComment(prNumber, input.updateComment, render.getTitle(input.title), render.getPRComment(overallCoverage.project, filesCoverage, input.minCoverageOverall, input.minCoverageChangedFiles, input.title), client);
+
+  const failedCoverage = filesCoverage.files.some((file) => file.percentage < input.minCoverageChangedFiles);
+  if (failedCoverage) {
+    core.setFailed
+    ("Target file must have more than minimum coverage.");
+  }
+}
+
+
+/**
+ * PR にコメントを追加または更新
+ *
+ * @param {number} prNumber - PR 番号
+ * @param {boolean} update - コメントを更新する場合は true
+ * @param {string} title - コメントのタイトル
+ * @param {string} body - コメントの本文
+ * @param {Object} client - Github API クライアント
+ */
 async function addComment(prNumber, update, title, body, client) {
   let commentUpdated = false;
 
@@ -146,7 +138,7 @@ async function addComment(prNumber, update, title, body, client) {
       ...github.context.repo,
     });
     const comment = comments.data.find((comment) =>
-      comment.body.startsWith(title),
+        comment.body.startsWith(title),
     );
 
     if (comment) {
