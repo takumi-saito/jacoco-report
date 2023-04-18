@@ -16736,6 +16736,7 @@ function getInputValues() {
     minCoverageChangedFiles: parseFloat(core.getInput("min-coverage-changed-files")),
     title: core.getInput("title"),
     updateComment: parseBooleans(core.getInput("update-comment")),
+    mergeBlock: parseBooleans(core.getInput("merge-block")),
     debugMode: parseBooleans(core.getInput("debug-mode")),
     token: core.getInput("token"),
   };
@@ -16805,12 +16806,19 @@ async function getChangedFiles(base, head, client) {
 }
 
 async function handlePullRequest(prNumber, input, overallCoverage, filesCoverage, client) {
-  await addComment(prNumber, input.updateComment, render.getTitle(input.title), render.getPRComment(overallCoverage.project, filesCoverage, input.minCoverageOverall, input.minCoverageChangedFiles, input.title), client);
+  await addComment(
+      prNumber,
+      input.updateComment,
+      render.getTitle(input.title),
+      render.getPRComment(overallCoverage.project,filesCoverage, input.minCoverageOverall, input.minCoverageChangedFiles, input.title),
+      client
+  );
 
-  const failedCoverage = filesCoverage.files.some((file) => file.percentage < input.minCoverageChangedFiles);
-  if (failedCoverage) {
-    core.setFailed
-    ("Target file must have more than minimum coverage.");
+  if (input.mergeBlock) {
+    const failedCoverage = filesCoverage.files.some((file) => file.percentage < input.minCoverageChangedFiles);
+    if (failedCoverage) {
+      core.setFailed("Target file must have more than minimum coverage.");
+    }
   }
 }
 

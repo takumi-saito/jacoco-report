@@ -48,7 +48,7 @@ jobs:
 
       - name: Add coverage to PR
         id: jacoco
-        uses: takumi-saito/jacoco-report@v1.6
+        uses: takumi-saito/jacoco-report@v1.7
         with:
           paths: ${{ github.workspace }}/build/reports/jacoco/testCoverage/testCoverage.xml
           token: ${{ secrets.GITHUB_TOKEN }}

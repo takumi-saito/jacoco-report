@@ -22,6 +22,10 @@ inputs:
     description: "Update the coverage report comment instead of creating new ones. Requires title to works properly."
     required: false
     default: "false"
+  merge-block:
+    description: "Enable merge block if coverage is below threshold"
+    required: false
+    default: "false"
   debug-mode:
     description: "Run the action in debug mode and get debug logs printed in console"
     required: false
